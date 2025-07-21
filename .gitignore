@@ -15,3 +15,6 @@ venv/
 # Operating System
 .DS_Store
 Thumbs.db
+
+# credentials
+client_credentials.txt
