@@ -148,7 +148,7 @@ def factory():
 @pytest.fixture
 def mock_requests():
     """Mocks the requests library."""
-    with patch('spotisyaspy.requests') as mock_req:
+    with patch('spotisyaspy.spotisyaspy.requests') as mock_req:
         yield mock_req
 
 class TestSIAPFactory:
@@ -172,7 +172,7 @@ class TestSIAPFactory:
         with pytest.raises(ValueError):
             SIAP_Factory()
 
-    @patch('spotisyaspy.requests.post')
+    @patch('spotisyaspy.spotisyaspy.requests.post')
     def test_get_access_token(self, mock_post, factory):
         """Test that the factory correctly requests and stores an access token."""
         mock_response = MagicMock()
