@@ -673,7 +673,7 @@ class SIAP_Factory:
         shutdown_event.wait()
 
         # Kill Flask after auth (forcefully)
-        requests.get(f"http:/{server_ip}:{port}/shutdown-dummy")  # dummy request to unblock server
+        requests.get(f"http://{server_ip}:{port}/shutdown-dummy")  # dummy request to unblock server
         
         print("Flask auth server has stopped.")
 
