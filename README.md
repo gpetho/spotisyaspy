@@ -26,9 +26,16 @@ The core of the library is the `SIAP_Factory`, a singleton object factory and st
 
 Before you can use SpotIsyAsPy, you need to set up a few things.
 
-### 1. Install Dependencies
+### 1. Installation
 
-The library relies on `requests`, `flask`, and `tqdm`. You can install them using pip:
+You can install SpotIsyAsPy using pip:
+
+```bash
+pip install spotisyaspy
+```
+
+Alternatively you can simply import the module `spotisyaspy.py` after downloading it from GitHub. In this case, you need to install its dependencies before import. The module relies on `requests`, `flask`, and `tqdm`. You can install them using pip:
+
 ```bash
 pip install requests flask tqdm
 ```
@@ -45,7 +52,12 @@ You need a **Client ID** and a **Client Secret** from Spotify to use the API.
     ```
     http://127.0.0.1:8050/callback
     ```
-    The application will use the specified port for user authentication, which only comes into play if you want to create new playlists or add tracks to your playlists using SpotIsyAsPy. You still have to add a valid value if you will not be using this functionality since this is a required field of the Dashboard form, but it will not be used in that case. If you want to work with playlists and are already using 8050 on the machine you want to run SpotIsyAsPy on, you can specify a different port. The correct port number can be set to the preferred value in the SpotIsyAsPy factory setup. Then click **"Add"**, then **"Save"** at the bottom of the page.
+    Then click **"Add"**, then **"Save"** at the bottom of the page.
+
+    The application will use the specified port for user authentication, which only comes into play if you want to create new playlists or add tracks to your playlists using SpotIsyAsPy. You still have to add a valid value if you will not be using this functionality since this is a required field of the Dashboard form, but it will not be used in that case.
+    
+    If you do want to work with playlists and are already using 8050 on the machine you want to run SpotIsyAsPy on or want to use a different IP address, you can do this. The correct port number and IP address can be set to the preferred values on initialisation of the SpotIsyAsPy factory using the attributes `SIAP_Factory(auth_server_ip="0.0.0.0", auth_server_port=8888)`, or by assigning the preferred value to the `factory.auth_server_ip` or `factory.auth_server_port` attributes before calling a method that triggers authorization. 
+
 6.  Once the app is created, you will see your **Client ID**. Click **"Show client secret"** to see your **Client Secret**. **Copy both of these values.**
 7.  **For user-related actions (like creating playlists):** If you own several Spotify user accounts and want to manage their playlists with SpotIsyAsPy, you don't need separate client IDs and secrets for each user. It is sufficient to add further users (up to 25) under User Management in the developer Dashboard and use the same ID and secrets for all of the user logins. You don't have to add the owner of the app (the account with which you have got your client credentials) as user. For all other Spotify accounts, open the "User Management" tab, enter the user's name and email address (the one with which the Spotify account is linked) and click "Add user". It is neither documented in the Web API docs nor entirely clear whether these users need to have a Spotify Developer account activated before they can access their playlists and account data through the API.
 
@@ -65,6 +77,12 @@ CLIENT_SECRET = "YOUR_CLIENT_SECRET"
 
 # Initialize the factory
 factory = SIAP_Factory(client_id=CLIENT_ID, client_secret=CLIENT_SECRET)
+```
+
+Alternatively you can put your client ID and secret in a simple text file containing the ID on the first line and the secret on the second and call the constructor like this:
+
+```python
+factory = SIAP_Factory(credentials_file="my_credentials.txt")
 ```
 
 ### 2. Searching for Content
