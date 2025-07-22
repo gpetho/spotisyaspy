@@ -22,18 +22,20 @@ dependencies = [
     "tqdm>=4.66.1",
 ]
 dynamic = ["version"]
-license = "MIT"
-license-files = ["LICENSE.md"]
+license = { file = "LICENSE" }
 
 [project.urls]
 "Homepage" = "https://github.com/gpetho/spotisyaspy"
 "Bug Tracker" = "https://github.com/gpetho/spotisyaspy/issues"
 
+[tool.setuptools]
+license-files = ["LICENSE"]
+
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["spotisyaspy"]
 
-[tool.setuptools_scm] # Add this section
+[tool.setuptools_scm]
 write_to = "spotisyaspy/_version.py" # setuptools_scm will write the version here
 
 [tool.pytest.ini_options]
