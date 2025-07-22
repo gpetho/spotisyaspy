@@ -1,6 +1,6 @@
 # spotisyaspy/__init__.py
 
-from .spotisyaspy import SIAP_Factory
+from .spotisyaspy import SIAP_Factory, AttrDict
 
 try:
     from ._version import version as __version__

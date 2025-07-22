@@ -8,10 +8,33 @@ import requests
 import base64
 import urllib.parse
 from typing import List, Dict, Union
+from collections import namedtuple
 
 import requests
 from tqdm import tqdm
 from flask import Flask, request, redirect
+
+class AttrDict(dict):
+    """
+    A dictionary subclass that allows
+    attribute-style access to its keys.
+    """
+    def __getattr__(self, key):
+        try:
+            return self[key]
+        except KeyError as e:
+            raise AttributeError(
+                f"'AttrDict' object has no attribute '{key}'") from e
+
+    def __setattr__(self, key, value):
+        self[key] = value
+
+    def __delattr__(self, key):
+        try:
+            del self[key]
+        except KeyError as e:
+            raise AttributeError(
+                f"'AttrDict' object has no attribute '{key}'") from e
 
 class SIAP_Factory:
     """
@@ -23,20 +46,129 @@ class SIAP_Factory:
     _instance = None
     SPOTIFY_ID_LEN = 22
 
+    # Named tuple to hold a reference to a cache object's key.
+    # This is used in case the same entity has multiple IDs
+    # in Spotify's database, e.g. getting an artist by its Spotify ID
+    # returns an artist object with a DIFFERENT ID, but it's
+    # still the same artist. The CachePointer object is stored
+    # in the cache under the requested (secondary) ID, and it points to the
+    # actual artist etc. object in the cache, which is shelved under the
+    # actual ID contained in the object's data as returned by Spotify.
+    # Thus the value of the ref attribute is the (main) ID of the object.
+    CachePointer = namedtuple('CachePointer', ['ref'])
+
+    class ObjectCache(dict):
+        """
+        A dictionary subclass that stores objects
+        of a specific type and automatically resolves
+        cache pointer values to the actual objects.
+
+        Items and values methods ignore CachePointer values
+        and key-value pairs where the value is a CachePointer.
+        """
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+
+        def __getitem__(self, key):
+            value = super().__getitem__(key)
+            if isinstance(value, SIAP_Factory.CachePointer):
+                # Resolve the pointer to the actual object
+                return self[value.ref]
+            return value
+
+        def __setitem__(self, key, value, resolve_pointer=False):
+            if (key in self
+                    and isinstance(super().__getitem__(key),
+                                   SIAP_Factory.CachePointer)
+                    and resolve_pointer):
+                ref_key = super().__getitem__(key).ref
+                super().__setitem__(ref_key, value)
+            else:
+                super().__setitem__(key, value)
+
+        def get(self, key, default=None):
+            value = super().get(key, default)
+            if isinstance(value, SIAP_Factory.CachePointer):
+                # Resolve the pointer to the actual object
+                return self[value.ref]
+            return value
+
+        # Items and values should ignore CachePointer values
+        # and key-value pairs the value of which is a CachePointer.
+        # Thus if the items are iterated over, they will not include
+        # artificial duplicate values.
+        def items(self):
+            return_list = []
+            for key, value in super().items():
+                if not isinstance(value, SIAP_Factory.CachePointer):
+                    return_list.append((key, value))
+            return return_list
+        
+        def values(self):
+            return [value for _, value in self.items()]
+
+        def pointers(self):
+            """
+            Returns a dictionary of keys that hold CachePointer values
+            and the referenced keys that the pointers point to.
+
+            This is useful for debugging or inspecting
+            the cache to see which keys are CachePointers.
+
+            len(pointers) + len(items) should be equal to len(self)
+            """
+            return {key: value.ref
+                    for key, value in super().items()
+                    if isinstance(value, SIAP_Factory.CachePointer)}
+                        
     def __new__(cls, *args, **kwargs):
         if not cls._instance:
             cls._instance = super(SIAP_Factory, cls).__new__(cls)
         return cls._instance
 
     def __init__(self, client_id=None, client_secret=None,
+                 credentials_file="client_credentials.txt",
+                 auth_server_ip="127.0.0.1",
+                 auth_server_port=8050,
                  silent=False, max_retries=3):
+        """
+        Initializes the factory with the given
+        client ID and secret.
+        If client_id and client_secret are not provided,
+        the initialization will attempt to read them
+        from a credentials file on the given path,
+        which should contain the client ID on the first line
+        and the client secret on the second line.
+        If the file is not found or does not contain the
+        required information, and client_id and client_secret
+        are not provided as arguments either,
+        a RuntimeError is raised.
+        Args:
+            client_id (str): Spotify API client ID.
+            client_secret (str): Spotify API client secret.
+            auth_server_ip (str): IP address for a Flask auth server
+                that handles user authorization. Defaults to 127.0.0.1.
+            auth_server_port (int): Port for the Flask auth server.
+                Defaults to 8050.
+            silent (bool): If True, suppresses output messages
+                and progress bars. Defaults to False (verbose mode).
+        """
         # The singleton pattern requires initialization logic to run only once.
         if hasattr(self, '_initialized'):
             return
-            
+        
+        if client_id is None or client_secret is None:
+            try:
+                with open(credentials_file, "r") as f:
+                    lines = f.readlines()
+                    client_id = lines[0].strip()
+                    client_secret = lines[1].strip()
+            except:
+                pass
+
         if not client_id or not client_secret:
-            raise ValueError("Client ID and Client Secret are "
-                             " required for the first initialization.")
+            raise RuntimeError("Client ID and Client Secret are "
+                               "required for initialization.")
         
         self.client_id = client_id
         self.client_secret = client_secret
@@ -49,13 +181,13 @@ class SIAP_Factory:
         # Cache for storing created objects by type and ID
         # This is the most important part of the factory.
         self._cache = {
-            'artist': {},
-            'album': {},
-            'track': {},
-            'playlist': {},
-            'show': {},
-            'episode': {},
-            'audiobook': {}
+            'artist': SIAP_Factory.ObjectCache({}),
+            'album': SIAP_Factory.ObjectCache({}),
+            'track': SIAP_Factory.ObjectCache({}),
+            'playlist': SIAP_Factory.ObjectCache({}),
+            'show': SIAP_Factory.ObjectCache({}),
+            'episode': SIAP_Factory.ObjectCache({}),
+            'audiobook': SIAP_Factory.ObjectCache({}),
         }
 
         # These are the "client credentials" used for
@@ -64,6 +196,14 @@ class SIAP_Factory:
         # tracks, public, playlists, etc.
         self._access_token = None
         self._token_expiration_time = None
+
+        # These are the IP address and port
+        # on which the Flask server runs to handle
+        # user authorization. The server is started
+        # when the user calls a method that requires
+        # user authorization, such as creating a playlist.
+        self.auth_server_ip = auth_server_ip
+        self.auth_server_port = auth_server_port
 
         # These are the user authorization tokens by which
         # the user authorizes the app to access their
@@ -95,7 +235,7 @@ class SIAP_Factory:
                       "Starting with an empty cache.")
 
     @property
-    def albums(self) -> Dict[str, 'SIAP_Factory.Album']:
+    def albums(self) -> ObjectCache:
         """
         Returns a dict containing all albums in the cache.
         The keys are album IDs, and the values are simplified
@@ -104,7 +244,7 @@ class SIAP_Factory:
         return self._cache['album']
 
     @property
-    def artists(self) -> Dict[str, 'SIAP_Factory.Artist']:
+    def artists(self) -> ObjectCache:
         """
         Returns a dict containing all artists in the cache.
         The keys are artist IDs, and the values are simplified
@@ -113,7 +253,7 @@ class SIAP_Factory:
         return self._cache['artist']
 
     @property
-    def tracks(self) -> Dict[str, 'SIAP_Factory.Track']:
+    def tracks(self) -> ObjectCache:
         """
         Returns a dict containing all tracks in the cache.
         The keys are track IDs, and the values are simplified
@@ -122,7 +262,7 @@ class SIAP_Factory:
         return self._cache['track']
 
     @property
-    def playlists(self) -> Dict[str, 'SIAP_Factory.Playlist']:
+    def playlists(self) -> ObjectCache:
         """
         Returns a dict containing all playlists in the cache.
         The keys are playlist IDs, and the values are playlist objects.
@@ -130,7 +270,10 @@ class SIAP_Factory:
         return self._cache['playlist']
 
     def _get_access_token(self) -> None:
-        """Retrieves and stores a new access token from the Spotify API."""
+        """
+        Retrieves and stores a new access token from the Spotify API.
+        Raises ValueError if the request fails.
+        """
         try:
             response = requests.post(self.auth_url, data={
                 'grant_type': 'client_credentials',
@@ -146,21 +289,49 @@ class SIAP_Factory:
         except requests.exceptions.RequestException as e:
             print("FATAL: Could not authenticate "
                   f"with Spotify API. Error: {e}")
-            raise
+            raise ValueError(
+                "Failed to retrieve access token. "
+                "Please check your client ID and secret.") from e
 
     def _get_headers(self, auth_type='client') -> Dict[str, str]:
         """
-        Constructs request headers and
-        refreshes the token if it's expired.
+        Constructs request headers and retrieves an access token
+        from the API or refreshes it if it's expired.
+        Args:
+            auth_type (str): The type of authentication to use.
+                'client' for client credentials,
+                'user' for user authorization.
+        Returns:
+            A dictionary containing the 'Authorization' header.
+        Raises ValueError if the user authorization fails.
         """
         if auth_type == 'client':
+            # An access token is retrieved on creation of the factory,
+            # so it is assumed to be available.
+            # Check if the access token is expired and
+            # refresh it if necessary.
             if (not self._token_expiration_time
                 or self._token_expiration_time < datetime.now()):
                 if not self.silent:
                     print("Access token expired, refreshing...")
                 self._get_access_token()
             return {'Authorization': f'Bearer {self._access_token}'}
+
         elif auth_type == 'user':
+            if not self._auth_access_token:
+                # User authorization has not yet been completed
+                # for user-specific actions
+                print("User authorization is required for this action.")
+                print("Starting the authorization flow...")
+                self._run_auth_server()
+
+                if not self._auth_access_token:
+                    raise ValueError("User authorization failed. "
+                        "Please check your credentials and try again.")
+                return {'Authorization': f'Bearer {self._auth_access_token}'}
+
+            # Check if the user access token is expired
+            # and refresh it if necessary            
             if (not self._auth_token_expiration_time
                 or self._auth_token_expiration_time < datetime.now()):
                 if not self.silent:
@@ -168,7 +339,8 @@ class SIAP_Factory:
                 self._refresh_auth_token()
             return {'Authorization': f'Bearer {self._auth_access_token}'}
 
-    def _request(self, method: str, url: str, **kwargs) -> Dict[str, Union[str, List]]:
+    def _request(self, method: str, url: str,
+                 **kwargs) -> Dict[str, Union[str, List]]:
         """
         A centralized method for making API requests
         with built-in error handling and retries.
@@ -264,17 +436,12 @@ class SIAP_Factory:
                                 initial=len(items), 
                                 desc="Fetching pages", unit="items")
         
-        print(f"{initial_response=}")
-        print(f"{len(items)=}", f"{max_results=}, {total=}")
-
         while next_url:
             data = self._request('GET', next_url)
             if search_type:
                 data = data[search_type]
-            print(f"{data=}")
             new_items = data.get('items', [])
             items.extend(new_items)
-            print(f"{len(items)=}")
             if len(items) > max_results:
                 diff = len(items) - max_results
                 if progress_bar:
@@ -292,20 +459,37 @@ class SIAP_Factory:
         return items
 
     def _create_object_from_data(
-            self, obj_type: str, data: dict,
+            self, obj_type: str, requested_obj_id: str, data: dict,
             is_full_object=False) -> Union['SIAP_Factory.BaseObject', None]:
         """
         Creates or updates a cached object from API data.
         If a simplified object exists and full data
         is provided, it upgrades the object.
         """
-        if obj_type not in self._cache:
-            self._cache[obj_type] = {}
+        assert obj_type in self._cache, \
+            f"Object type '{obj_type}' is not supported."
 
         obj_id = data.get('id')
         if not obj_id:
             raise ValueError(
                 f"Data for {obj_type} must contain an 'id' field.")
+
+        # If the requested ID is not the same as the ID in the data,
+        # this means that the user requested the entity by a secondary ID
+        # in a case where Spotify has multiple IDs for the same entity.
+        # The GET request then returns the entity with its main ID.
+        # In this case, we need to create a CachePointer that is stored
+        # in the cache under the requested ID, and it points to the
+        # actual object in the cache, which is shelved under the main ID.
+
+        if requested_obj_id != obj_id:
+            # Create a CachePointer to the actual object
+            # and store it in the cache under the requested ID.
+            self._cache[obj_type][requested_obj_id] =\
+                SIAP_Factory.CachePointer(ref=obj_id)
+        
+        # The referenced object itself may still need to be created
+        # or updated in the cache.
 
         existing_obj = self._cache[obj_type].get(obj_id)
 
@@ -316,8 +500,11 @@ class SIAP_Factory:
             if isinstance(existing_obj, full_type):
                 return existing_obj
             else:
-                # Create a new full object and replace the 
-                # simplified one in cache if there is one.
+                # Create a new full object using the class constructor
+                # and replace the simplified one in cache if there is one.
+                # Since obj_id is coming from the Spotify data, it is
+                # (hopefully) the main ID of the object and does not need
+                # to be resolved.
                 obj = full_type(data, self)
                 self._cache[obj_type][obj_id] = obj
                 return obj
@@ -357,10 +544,7 @@ class SIAP_Factory:
         else:
             return simplified_class
 
-    def _run_auth_server(self,
-                         server_ip="127.0.0.1",
-                         port=8050,
-                         ) -> None:
+    def _run_auth_server(self, server_ip=None, port=None) -> None:
         """
         Starts a Flask server to handle Spotify OAuth authentication.
         This method is used to redirect the user to Spotify's
@@ -376,10 +560,16 @@ class SIAP_Factory:
 
         Args:
             server_ip (str): The IP address to run the Flask server on.
-                Defaults to "127.0.0.1"
+                Defaults to the factory's auth_server_ip attribute,
+                which is 127.0.0.1 by default.
             port (int): The port to run the Flask server on.
-                Defaults to 8050.
+                Defaults to the factory's auth_server_port attribute,
+                which is 8050 by default.
         """
+        if server_ip is None:
+            server_ip = self.auth_server_ip
+        if port is None:
+            port = self.auth_server_port
         shutdown_event = threading.Event()
         app = Flask(__name__)
         server_thread = None
@@ -601,7 +791,7 @@ class SIAP_Factory:
         for item_data in all_items_data:
             try:
                 item = self._create_object_from_data(
-                    obj_type, item_data, is_full_object=full)
+                    obj_type, item_data['id'], item_data, is_full_object=full)
                 return_items.append(item)
             except ValueError as e:
                 if not is_silent:
@@ -669,7 +859,7 @@ class SIAP_Factory:
         data = self._request(
             'GET', f"{self.base_api_url}/artists/{artist_id}")
         return self._create_object_from_data(
-            'artist', data, is_full_object=True)
+            'artist', artist_id, data, is_full_object=True)
 
     def get_album(self, album_id: str) -> 'SIAP_Factory.FullAlbum':
         """
@@ -681,7 +871,7 @@ class SIAP_Factory:
         data = self._request(
             'GET', f"{self.base_api_url}/albums/{album_id}")
         return self._create_object_from_data(
-            'album', data, is_full_object=True)
+            'album', album_id, data, is_full_object=True)
 
     def get_track(self, track_id: str) -> 'SIAP_Factory.FullTrack':
         """
@@ -693,7 +883,7 @@ class SIAP_Factory:
         data = self._request(
             'GET', f"{self.base_api_url}/tracks/{track_id}")
         return self._create_object_from_data(
-            'track', data, is_full_object=True)
+            'track', track_id, data, is_full_object=True)
 
     def get_playlist(self, playlist_id: str) -> 'SIAP_Factory.FullPlaylist':
         """
@@ -704,7 +894,7 @@ class SIAP_Factory:
         data = self._request(
             'GET', f"{self.base_api_url}/playlists/{playlist_id}")
         return self._create_object_from_data(
-            'playlist', data, is_full_object=True)
+            'playlist', playlist_id, data, is_full_object=True)
 
     def create_user_playlist(self, playlist_name: str, description: str,
                              public=True) -> 'SIAP_Factory.FullPlaylist':
@@ -722,6 +912,18 @@ class SIAP_Factory:
         This simply means clicking "Allow" on the Spotify
         authorization page that opens in the browser.
         
+        For authentication, the factory starts a Flask server
+        on the specified IP address and port. By default,
+        it runs on 127.0.0.1:8050. The ip and port can be
+        changed by passing the auth_server_ip and
+        auth_server_port parameters to the factory's constructor
+        or by setting its attributes of the same name.
+        For authorization to work, the callback URL
+        must be set in the Spotify Developer Dashboard to
+        the same address and port, adding '/callback', e.g.,
+        for the default values,
+        http://127.0.0.1:8050/callback.
+
         Once the authentication has been completed,
         the new playlist is created and returned as a FullPlaylist
         object, and tracks can be added to it using method calls.
@@ -743,15 +945,6 @@ class SIAP_Factory:
         for other users, removing items from playlists,
         reordering items or deleting playlists.
         """
-        if not self._auth_access_token:
-            print("User authorization is required to create a playlist.")
-            print("Starting the authorization flow...")
-            self._run_auth_server()
-
-        if not self._auth_access_token:
-            raise ValueError("User authorization failed. "
-                             "Please check your credentials and try again.")
-
         headers = self._get_headers(auth_type='user')
         headers['Content-Type'] = 'application/json'
 
@@ -769,8 +962,6 @@ class SIAP_Factory:
             raise requests.exceptions.HTTPError(
                 f"Failed to create playlist: {response.text}")
         
-        print(response.json())
-
         new_playlist_id = response.json().get('id')
 
         return self.get_playlist(new_playlist_id)
@@ -789,8 +980,15 @@ class SIAP_Factory:
             return full_data
 
         @property
-        def external_urls(self) -> Dict[str, str]:
-            return {"spotify": f"https://open.spotify.com/{self.type}/{self.id}"}
+        def external_urls(self) -> AttrDict:
+            """
+            Returns a dictionary with external URLs for the object.
+            The dictionary contains a single key 'spotify'
+            with the URL to the object on Spotify.
+            """
+            return AttrDict(
+                 {"spotify":
+                  f"https://open.spotify.com/{self.type}/{self.id}"})
 
         @property
         def uri(self) -> str:
@@ -819,7 +1017,14 @@ class SIAP_Factory:
             data = self._factory._request(
                 'GET', f"{self._factory.base_api_url}/{self.type}s/{self.id}")
             return self._factory._create_object_from_data(
-                self.type, data, is_full_object=True)
+                self.type, self.id, data, is_full_object=True)
+
+        @property
+        def update(self) -> 'SIAP_Factory.BaseObject':
+            """
+            Returns the cached version of the current object.
+            """
+            return self._factory._cache[self.type][self.id]
 
         def to_dict(self) -> Dict[str, Union[str, List]]:
             """
@@ -951,7 +1156,8 @@ class SIAP_Factory:
                     for album_data in album_items:
                         try:
                             album_obj = self._factory._create_object_from_data(
-                                'album', album_data, is_full_object=False)
+                                'album', album_data['id'], album_data,
+                                is_full_object=False)
                             if album_type == "appears_on":
                                 self._appears_on.append(album_obj.id)
                             else:
@@ -1010,7 +1216,7 @@ class SIAP_Factory:
 
         def __repr__(self):
             return f"<Full Artist: {self.name} (ID: {self.id}, " +\
-                "Popularity: {self.popularity}, Followers: {self.followers})>"
+                f"Popularity: {self.popularity}, Followers: {self.followers})>"
 
     class Album(BaseObject):
         """Represents a simplified Spotify Album object."""
@@ -1029,7 +1235,7 @@ class SIAP_Factory:
                 if artist_id:
                     self._artist_ids.append(artist_id)
                     self._factory._create_object_from_data(
-                        'artist', artist, is_full_object=False)
+                        'artist', artist_id, artist, is_full_object=False)
                 assert artist_id in self._factory.artists, \
                     f"Artist ID {artist_id} not found in artists cache."
                 assert self._factory.artists[artist_id].id == artist_id, \
@@ -1069,7 +1275,7 @@ class SIAP_Factory:
             return self.full.tracks
 
         @property
-        def external_ids(self) -> Dict[str, str]:
+        def external_ids(self) -> AttrDict:
             """
             Returns a dictionary of external IDs for the album.
             This can include ISRC, EAN and UPC.
@@ -1147,8 +1353,8 @@ class SIAP_Factory:
             return self._label
 
         @property
-        def external_ids(self) -> Dict[str, str]:
-            return self._external_ids
+        def external_ids(self) -> AttrDict:
+            return AttrDict(self._external_ids)
         
         @property
         def ean(self) -> Union[str, None]:
@@ -1194,7 +1400,7 @@ class SIAP_Factory:
                         continue
                     # Create Track objects and cache them
                     track_obj = self._factory._create_object_from_data(
-                        'track', item, is_full_object=False)
+                        'track', item['id'], item, is_full_object=False)
                     self._tracks.append(track_obj.id)
 
                     # Set album ID for the track
@@ -1256,7 +1462,7 @@ class SIAP_Factory:
                 if artist_id:
                     # Create a simplified Artist object
                     self._factory._create_object_from_data(
-                        'artist', artist, is_full_object=False)
+                        'artist', artist_id, artist, is_full_object=False)
                     self._artist_ids.append(artist_id)
                 elif not self._factory.silent:
                     warnings.warn(f"Artist ID missing in track data: {data}")
@@ -1328,7 +1534,7 @@ class SIAP_Factory:
             return self.full.popularity
 
         @property
-        def external_ids(self) -> Dict[str, str]:
+        def external_ids(self) -> AttrDict:
             """
             Returns a dictionary of external IDs for the track.
             This can include ISRC, EAN and UPC.
@@ -1390,8 +1596,8 @@ class SIAP_Factory:
             return self._popularity
 
         @property
-        def external_ids(self):
-            return self._external_ids
+        def external_ids(self) -> AttrDict:
+            return AttrDict(self._external_ids)
         
         @property
         def ean(self):
@@ -1409,11 +1615,11 @@ class SIAP_Factory:
             return self._external_ids.get('isrc', None)
 
         def __repr__(self):
-            return repr(super()).replace("<Simplified", "<Full")
+            return super().__repr__().replace("<Simplified", "<Full")
             
         def __str__(self):
             artist_names = ' & '.join(str(a) for a in self.artists)
-            return f"Track: {self.name} by {artist_names}'"
+            return f"Track: {self.name} by {artist_names}"
 
     class Playlist(BaseObject):
         """Represents a Spotify Playlist object."""
@@ -1441,6 +1647,11 @@ class SIAP_Factory:
             Raises ValueError if the new name is empty.
             If the update is successful, updates the name of the playlist
             object. Has no effect if the update fails.
+
+            User authorization is required for this operation
+            and needs to be completed in a browser window
+            that should open automatically if it is not already done.
+            See SIAP_Factory.create_user_playlist() for more details.
             """
             if self._playlist_setter('name', new_name):
                 self._name = new_name
@@ -1457,6 +1668,11 @@ class SIAP_Factory:
             and updates it on Spotify. New description can be empty.
             If the update is successful, updates the description
             of the playlist object. Has no effect if the update fails.
+
+            User authorization is required for this operation
+            and needs to be completed in a browser window
+            that should open automatically if it is not already done.
+            See SIAP_Factory.create_user_playlist() for more details.
             """
             if self._playlist_setter('description', new_description):
                 self._description = new_description
@@ -1476,6 +1692,11 @@ class SIAP_Factory:
             and collaborative is set to True.
             If the update is successful, updates the collaborative
             status of the playlist object. Has no effect if the update fails.
+
+            User authorization is required for this operation
+            and needs to be completed in a browser window
+            that should open automatically if it is not already done.
+            See SIAP_Factory.create_user_playlist() for more details.
             """
             if is_collaborative and self._public:
                 raise ValueError(
@@ -1500,6 +1721,11 @@ class SIAP_Factory:
             and public is set to True.
             If the update is successful, updates the public
             status of the playlist object. Has no effect if the update fails.
+            
+            User authorization is required for this operation
+            and needs to be completed in a browser window
+            that should open automatically if it is not already done.
+            See SIAP_Factory.create_user_playlist() for more details.
             """
             if is_public and self._collaborative:
                 raise ValueError(
@@ -1557,7 +1783,8 @@ class SIAP_Factory:
                     if track_data and track_data.get('type') == 'track':
                         self._tracks.append(
                             self._factory._create_object_from_data(
-                                'track', track_data, is_full_object=True))
+                                'track', track_data['id'], track_data,
+                                is_full_object=True))
                     else:
                         episode_count += 1
                 
@@ -1577,6 +1804,11 @@ class SIAP_Factory:
             It is up to the caller to ensure correct pagination,
             or just call add_tracks one by one for each track.
 
+            User authorization is required for this operation
+            and needs to be completed in a browser window
+            that should open automatically if it is not already done.
+            See SIAP_Factory.create_user_playlist() for more details.
+
             Args:
                 tracks: A list of track objects or their IDs to add,
                         or a single track object or ID.
@@ -1587,10 +1819,6 @@ class SIAP_Factory:
                     but not provided, or if the tracks are invalid.
                 requests.exceptions.HTTPError: If the API request fails.
             """
-            if not self._factory._auth_access_token:
-                raise ValueError("User authorization is " \
-                                 "required to add tracks.")
-            
             if not isinstance(tracks, list):
                 tracks = [tracks]
 

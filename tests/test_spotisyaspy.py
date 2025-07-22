@@ -166,11 +166,14 @@ class TestSIAPFactory:
         assert factory2._cache['test'] == "value"
 
     def test_initialization_requires_credentials(self):
-        """Test that the factory raises an error if credentials are not provided on first init."""
+        """
+        Test that the factory raises an error if neither credential variables
+        nor a credentials file are provided on first init.
+        """
         if hasattr(SIAP_Factory, '_instance'):
             SIAP_Factory._instance = None
-        with pytest.raises(ValueError):
-            SIAP_Factory()
+        with pytest.raises(RuntimeError):
+            SIAP_Factory(credentials_file=None)
 
     @patch('spotisyaspy.spotisyaspy.requests.post')
     def test_get_access_token(self, mock_post, factory):
@@ -191,7 +194,9 @@ class TestSIAPFactory:
 
     def test_cache_save_and_load(self, factory):
         """Test that the object cache can be saved to and loaded from a file."""
-        artist = factory._create_object_from_data('artist', MOCK_SIMPLE_ARTIST_DATA)
+        artist = factory._create_object_from_data('artist',
+                                                  MOCK_SIMPLE_ARTIST_DATA['id'],
+                                                  MOCK_SIMPLE_ARTIST_DATA)
         cache_file = "test_cache.pkl"
         
         factory.save_cache(cache_file)
@@ -261,7 +266,9 @@ class TestSimplifiedToFullObjectUpgrade:
     def test_simplified_artist_to_full(self, factory, mock_requests):
         """Test that accessing a full property on a simplified artist triggers an upgrade."""
         # 1. Create a simplified artist and cache it
-        simple_artist = factory._create_object_from_data('artist', MOCK_SIMPLE_ARTIST_DATA)
+        simple_artist = factory._create_object_from_data('artist',
+                                                         MOCK_SIMPLE_ARTIST_DATA['id'],
+                                                         MOCK_SIMPLE_ARTIST_DATA)
         assert isinstance(simple_artist, factory.Artist)
         assert not isinstance(simple_artist, factory.FullArtist)
 
@@ -287,7 +294,9 @@ class TestSimplifiedToFullObjectUpgrade:
 
     def test_simplified_album_to_full(self, factory, mock_requests):
         """Test that accessing a full property on a simplified album triggers an upgrade."""
-        simple_album = factory._create_object_from_data('album', MOCK_SIMPLE_ALBUM_DATA)
+        simple_album = factory._create_object_from_data('album',
+                                                        MOCK_SIMPLE_ALBUM_DATA['id'],
+                                                        MOCK_SIMPLE_ALBUM_DATA)
         assert isinstance(simple_album, factory.Album)
         assert not isinstance(simple_album, factory.FullAlbum)
 
@@ -310,7 +319,9 @@ class TestSimplifiedToFullObjectUpgrade:
         """Test that accessing a full property on a simplified track triggers an upgrade."""
         # A simplified track is created as part of the creation of a full album
         full_album = factory._create_object_from_data('album',
-                MOCK_FULL_ALBUM_DATA, is_full_object=True)
+                MOCK_FULL_ALBUM_DATA["id"],
+                MOCK_FULL_ALBUM_DATA,
+                is_full_object=True)
         simple_track = full_album.tracks[0]
         assert isinstance(simple_track, factory.Track)
         assert not isinstance(simple_track, factory.FullTrack)
@@ -333,7 +344,10 @@ class TestObjectPropertiesAndCaching:
 
     def test_full_artist_properties(self, factory):
         """Test properties of a FullArtist object."""
-        artist = factory._create_object_from_data('artist', MOCK_FULL_ARTIST_DATA, is_full_object=True)
+        artist = factory._create_object_from_data('artist',
+                                                  MOCK_FULL_ARTIST_DATA['id'],
+                                                  MOCK_FULL_ARTIST_DATA,
+                                                  is_full_object=True)
         
         assert artist.name == MOCK_FULL_ARTIST_DATA['name']
         assert artist.popularity == MOCK_FULL_ARTIST_DATA['popularity']
@@ -345,7 +359,10 @@ class TestObjectPropertiesAndCaching:
 
     def test_full_album_properties(self, factory):
         """Test properties of a FullAlbum object."""
-        album = factory._create_object_from_data('album', MOCK_FULL_ALBUM_DATA, is_full_object=True)
+        album = factory._create_object_from_data('album',
+                                                 MOCK_FULL_ALBUM_DATA['id'],
+                                                 MOCK_FULL_ALBUM_DATA,
+                                                 is_full_object=True)
 
         assert album.name == MOCK_FULL_ALBUM_DATA['name']
         assert album.label == MOCK_FULL_ALBUM_DATA['label']
@@ -355,8 +372,13 @@ class TestObjectPropertiesAndCaching:
 
     def test_full_track_properties(self, factory):
         """Test properties of a FullTrack object."""
-        factory._create_object_from_data('album', MOCK_SIMPLE_ALBUM_DATA)
-        track = factory._create_object_from_data('track', MOCK_FULL_TRACK_DATA, is_full_object=True)
+        factory._create_object_from_data('album',
+                                         MOCK_SIMPLE_ALBUM_DATA['id'],
+                                         MOCK_SIMPLE_ALBUM_DATA)
+        track = factory._create_object_from_data('track',
+                                                 MOCK_FULL_TRACK_DATA['id'],
+                                                 MOCK_FULL_TRACK_DATA,
+                                                 is_full_object=True)
 
         assert track.name == MOCK_FULL_TRACK_DATA['name']
         assert track.popularity == MOCK_FULL_TRACK_DATA['popularity']
@@ -366,8 +388,13 @@ class TestObjectPropertiesAndCaching:
 
     def test_playlist_properties(self, factory):
         """Test properties of a Playlist object."""
-        factory._create_object_from_data('album', MOCK_SIMPLE_ALBUM_DATA)
-        playlist = factory._create_object_from_data('playlist', MOCK_PLAYLIST_DATA, is_full_object=True)
+        factory._create_object_from_data('album',
+                                         MOCK_SIMPLE_ALBUM_DATA['id'],
+                                         MOCK_SIMPLE_ALBUM_DATA)
+        playlist = factory._create_object_from_data('playlist',
+                                                    MOCK_PLAYLIST_DATA['id'],
+                                                    MOCK_PLAYLIST_DATA,
+                                                    is_full_object=True)
 
         assert playlist.name == MOCK_PLAYLIST_DATA['name']
         assert playlist.description == MOCK_PLAYLIST_DATA['description']
