@@ -130,6 +130,7 @@ class SIAP_Factory:
                  credentials_file="client_credentials.txt",
                  auth_server_ip="127.0.0.1",
                  auth_server_port=8050,
+                 auth_redirect_uri=None,
                  silent=False, max_retries=3):
         """
         Initializes the factory with the given
@@ -204,6 +205,7 @@ class SIAP_Factory:
         # user authorization, such as creating a playlist.
         self.auth_server_ip = auth_server_ip
         self.auth_server_port = auth_server_port
+        self.auth_redirect_uri = auth_redirect_uri
 
         # These are the user authorization tokens by which
         # the user authorizes the app to access their
@@ -544,7 +546,8 @@ class SIAP_Factory:
         else:
             return simplified_class
 
-    def _run_auth_server(self, server_ip=None, port=None) -> None:
+    def _run_auth_server(self, server_ip=None, port=None,
+                         redirect_uri=None) -> None:
         """
         Starts a Flask server to handle Spotify OAuth authentication.
         This method is used to redirect the user to Spotify's
@@ -573,7 +576,12 @@ class SIAP_Factory:
         shutdown_event = threading.Event()
         app = Flask(__name__)
         server_thread = None
-        redirect_uri = f'http://{server_ip}:{port}/callback'
+        if not redirect_uri:
+            if self.auth_redirect_uri:
+                redirect_uri = self.auth_redirect_uri
+            else:
+                # Default redirect URI if not provided
+                redirect_uri = f'http://{server_ip}:{port}/callback'
         # Define the scope for the authorization.
         # Scopes comprise only those that are needed for the app
         # to be able to create, read and modify the user's playlists.
