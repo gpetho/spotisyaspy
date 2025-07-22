@@ -648,7 +648,7 @@ class SIAP_Factory:
             return "Authorization successful! You can close this window."
 
         def flask_thread():
-            app.run(host="127.0.0.1", port=8050, use_reloader=False)
+            app.run(host=server_ip, port=port, use_reloader=False)
 
         # Start Flask in a thread
         server_thread = threading.Thread(target=flask_thread)
@@ -665,7 +665,7 @@ class SIAP_Factory:
         shutdown_event.wait()
 
         # Kill Flask after auth (forcefully)
-        requests.get("http://127.0.0.1:8050/shutdown-dummy")  # dummy request to unblock server
+        requests.get(f"http:/{server_ip}:{port}/shutdown-dummy")  # dummy request to unblock server
         
         print("Flask auth server has stopped.")
 
