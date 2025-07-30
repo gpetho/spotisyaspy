@@ -21,6 +21,13 @@ The core of the library is the `SIAP_Factory`, a singleton object factory and st
 *   **Intuitive User Playlist Management**: Create new user playlists and add tracks to them with simple method calls. The library manages the one-time user authorization process by automatically opening a browser window and running a temporary local server.
 
 ---
+## Try it in a Google Colab Notebook
+
+I have created a Google Colab notebook to illustrate the functionalities of SIAP. It is loosely based on the User's Guide section below but adds plenty of further material. You can access it here:
+
+https://colab.research.google.com/drive/1BCu1P_nUKedgDmcf6xEVfFP_mJAMFd6C?usp=sharing
+
+---
 
 ## Prerequisites and Setup
 
